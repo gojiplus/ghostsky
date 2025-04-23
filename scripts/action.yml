@@ -1,0 +1,36 @@
+name: 'Post Random Ghost Blog to Bluesky'
+description: >
+  Fetch a random post URL from a Ghost sitemap and publish it to Bluesky via AT Protocol.
+inputs:
+  handle:
+    description: 'Bluesky handle (username)'
+    required: true
+  password:
+    description: 'Bluesky password'
+    required: true
+  sitemap-url:
+    description: 'URL to Ghost blog sitemap-posts.xml'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: pip install requests atproto-client
+
+    - name: Post random Ghost link to Bluesky
+      shell: bash
+      env:
+        BSKY_HANDLE: ${{ inputs.handle }}
+        BSKY_PASSWORD: ${{ inputs.password }}
+        SITEMAP_URL: ${{ inputs.sitemap-url }}
+      run: |
+        chmod +x scripts/post_random_ghost.py
+        ./scripts/post_random_ghost.py
