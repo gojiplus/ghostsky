@@ -28,11 +28,36 @@ if not urls:
 
 post_url = random.choice(urls)
 
-# --- 2. Login and post to Bluesky ---
-client = Client(service=SPROUT_URL)
+# --- 2. Build post text and facets ---
+message = f"Check out this post: {post_url}"
+
+# Compute byte offsets for the URL in the message
+byte_prefix = message.encode('utf-8')
+char_start = message.find(post_url)
+if char_start < 0:
+    raise ValueError(f"URL '{post_url}' not found in message")
+
+# Calculate byte positions
+to_prefix_bytes = message[:char_start].encode('utf-8')
+url_bytes = post_url.encode('utf-8')
+byte_start = len(to_prefix_bytes)
+byte_end = byte_start + len(url_bytes)
+
+facets = [
+    {
+        "index": {"byteStart": byte_start, "byteEnd": byte_end},
+        "features": [
+            {
+                "$type": "app.bsky.richtext.facet#link",
+                "uri": post_url
+            }
+        ]
+    }
+]
+
+# --- 3. Login and post to Bluesky ---
+client = Client(SPROUT_URL)
 client.login(HANDLE, PASSWORD)
 
-message = f"Check out this post: {post_url}"
-res = client.send_post(message)
-
-print("Posted to Bluesky:", res["uri"])
+res = client.send_post(message, facets=facets)
+print("Posted to Bluesky:", res.get("uri", "<no uri returned>"))
