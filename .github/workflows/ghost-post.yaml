@@ -1,36 +1,30 @@
-name: 🥝 Post random Ghost blog to Bluesky
+name: Post Ghost → Bsky
 
 on:
-  schedule:
-    - cron: '0 16 * * *'   # Every day at 16:00 UTC
   workflow_dispatch:
+  schedule:
+    - cron: "0 16 * * *"  # every day at 4 PM UTC
 
 jobs:
   post:
     runs-on: ubuntu-latest
 
-    # make the sitemap URL available to all steps in this job
-    env:
-      SITEMAP_URL: https://www.gojiberries.io/sitemap-posts.xml
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install requests atproto-client
+          pip install -r requirements.txt
 
-      - name: Post random blog link to Bluesky
+      - name: Post random Ghost blog to Bluesky
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
-          # inherits SITEMAP_URL from the job-level env
-        run: |
-          ./scripts/post_random_ghost.py
+          SITEMAP_URL: https://www.gojiberries.io/sitemap-posts.xml
+        run: python scripts/post_random_ghost.py
