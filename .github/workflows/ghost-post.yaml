@@ -2,12 +2,17 @@ name: 🥝 Post random Ghost blog to Bluesky
 
 on:
   schedule:
-    - cron: '0 16 * * *'   
-  workflow_dispatch: 
+    - cron: '0 16 * * *'   # Every day at 16:00 UTC
+  workflow_dispatch:
 
 jobs:
   post:
     runs-on: ubuntu-latest
+
+    # make the sitemap URL available to all steps in this job
+    env:
+      SITEMAP_URL: https://www.gojiberries.io/sitemap-posts.xml
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -26,5 +31,6 @@ jobs:
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+          # inherits SITEMAP_URL from the job-level env
         run: |
           ./scripts/post_random_ghost.py

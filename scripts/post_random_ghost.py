@@ -5,10 +5,12 @@ import requests
 from atproto_client import AtprotoClient
 
 # --- Configuration from env ---
-SPROUT_URL = "https://bsky.social"  # change if needed
+SPROUT_URL = "https://bsky.social"
 HANDLE     = os.getenv("BSKY_HANDLE")
 PASSWORD   = os.getenv("BSKY_PASSWORD")
-SITEMAP    = "https://www.gojiberries.io/sitemap-posts.xml"
+SITEMAP = os.getenv("SITEMAP_URL",
+    "https://www.gojiberries.io/sitemap-posts.xml"
+)
 
 if not (HANDLE and PASSWORD):
     raise RuntimeError("Missing BSKY_HANDLE / BSKY_PASSWORD environment variables")
