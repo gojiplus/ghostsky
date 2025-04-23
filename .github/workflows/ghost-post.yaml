@@ -1,0 +1,30 @@
+name: 🥝 Post random Ghost blog to Bluesky
+
+on:
+  schedule:
+    - cron: '0 16 * * *'   
+  workflow_dispatch: 
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests atproto-client
+
+      - name: Post random blog link to Bluesky
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
+        run: |
+          ./scripts/post_random_ghost.py
