@@ -21,7 +21,6 @@ if not (HANDLE and PASSWORD):
 resp = requests.get(SITEMAP)
 resp.raise_for_status()
 
-# Simple regex parse; for production you might use xml.etree.ElementTree
 urls = re.findall(r"<loc>(.*?)</loc>", resp.text)
 if not urls:
     raise RuntimeError("No URLs found in sitemap")
@@ -32,16 +31,14 @@ post_url = random.choice(urls)
 message = f"Check out this post: {post_url}"
 
 # Compute byte offsets for the URL in the message
-byte_prefix = message.encode('utf-8')
 char_start = message.find(post_url)
 if char_start < 0:
     raise ValueError(f"URL '{post_url}' not found in message")
 
-# Calculate byte positions
-to_prefix_bytes = message[:char_start].encode('utf-8')
-url_bytes = post_url.encode('utf-8')
-byte_start = len(to_prefix_bytes)
-byte_end = byte_start + len(url_bytes)
+prefix_bytes = message[:char_start].encode('utf-8')
+url_bytes    = post_url.encode('utf-8')
+byte_start   = len(prefix_bytes)
+byte_end     = byte_start + len(url_bytes)
 
 facets = [
     {
@@ -60,4 +57,6 @@ client = Client(SPROUT_URL)
 client.login(HANDLE, PASSWORD)
 
 res = client.send_post(message, facets=facets)
-print("Posted to Bluesky:", res.get("uri", "<no uri returned>"))
+
+# Correct attribute access here:
+print("Posted to Bluesky:", res.uri)
