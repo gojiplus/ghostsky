@@ -48,7 +48,6 @@ jobs:
 ```
 
 ### Inputs
-
 Name | Description | Required | Default
 handle | Your Bluesky handle (username) | ✅ | 
 password | Your Bluesky password | ✅ | 
