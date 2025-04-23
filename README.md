@@ -1,4 +1,4 @@
-## &#x1F47B; Post Random Ghost Blog to Bluesky
+## &#x1F47B;&#x1F98B; Post Random Ghost Blog to Bluesky
 
 Fetch a random post from your Ghost blog’s sitemap and publish it to your Bluesky feed on a schedule or on demand.
 
