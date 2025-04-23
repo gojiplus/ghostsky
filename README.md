@@ -1,6 +1,6 @@
 # 🥝 Post Random Ghost Blog to Bluesky
 
-Fetch a random post from your Ghost blog’s sitemap and publish it to your Bluesky feed on a schedule or on-demand.
+Fetch a random post from your Ghost blog’s sitemap and publish it to your Bluesky feed on a schedule or on demand.
 
 ## Features
 
@@ -49,10 +49,13 @@ jobs:
 
 ### Inputs
 
-Name | Description | Required | Default
-handle | Your Bluesky handle (username) | ✅ | 
-password | Your Bluesky password | ✅ | 
-sitemap-url | Full URL to your Ghost blog’s sitemap-posts.xml | ✅ | https://yourblog.com/sitemap-posts.xml
+| Name        | Description                                     | Required | Default                                 |
+|-------------|-------------------------------------------------|:--------:|:----------------------------------------|
+| `handle`      | Your Bluesky handle (username)                  | ✅       |                                          |
+| `password`    | Your Bluesky password                           | ✅       |                                          |
+| `sitemap-url` | Full URL to your Ghost blog’s `sitemap-posts.xml` | ✅       | `https://yourblog.com/sitemap-posts.xml` |
+
+
 
 ### How it works
 
