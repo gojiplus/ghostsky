@@ -165,10 +165,27 @@ logger.info(f"Maximum message length: {MAX_LEN} characters")
 logger.info(f"Label length: {label_length} characters")
 logger.info(f"Available space for content: {available_chars} characters")
 
-# Combine title and content if possible
-if title and content:
+# FIXED: Check if title appears at the start of content to avoid duplication
+title_at_start = False
+if title and content and len(title) < len(content):
+    # Remove any HTML entities or special characters before comparison
+    clean_title = re.sub(r'&[a-zA-Z]+;', ' ', title).strip()
+    clean_content = re.sub(r'&[a-zA-Z]+;', ' ', content[:len(title)+20]).strip()
+    
+    # Check if content starts with title (allowing for minor differences)
+    if clean_content.startswith(clean_title) or content.startswith(title):
+        title_at_start = True
+        logger.info("Title appears at the start of content - avoiding duplication")
+
+# Create the message based on what content we have
+if title_at_start:
+    # If title is already at the start of content, just use content
+    combined_text = content
+elif title and content:
+    # If we have both title and content, combine them
     combined_text = f"{title} - {content}"
 else:
+    # Use whatever we have
     combined_text = title or content or post_url
 
 logger.info(f"Combined text length (before truncation): {len(combined_text)} characters")
@@ -228,3 +245,5 @@ try:
 except Exception as e:
     logger.error(f"Error posting to Bluesky: {str(e)}")
     raise
+
+logger.info("Script completed successfully")
