@@ -4,9 +4,16 @@ import random
 import re
 import requests
 import logging
+import argparse
 from atproto import Client
 from bs4 import BeautifulSoup
-import html
+from datetime import datetime
+import sys
+
+# Configure argument parser
+parser = argparse.ArgumentParser(description='Post blog content to Bluesky')
+parser.add_argument('--latest', action='store_true', help='Post the latest article instead of a random one')
+args = parser.parse_args()
 
 # Configure logging
 logging.basicConfig(
@@ -35,11 +42,66 @@ logger.info(f"Fetching sitemap from {SITEMAP}")
 resp = requests.get(SITEMAP)
 resp.raise_for_status()
 urls = re.findall(r"<loc>(https?://.*?)</loc>", resp.text)
-if not urls:
-    logger.error("No URLs found in sitemap")
-    raise RuntimeError("No URLs found in sitemap")
-post_url = random.choice(urls)
-logger.info(f"Selected post URL: {post_url}")
+
+# Look for lastmod tags if present
+dates = re.findall(r"<lastmod>(.*?)</lastmod>", resp.text)
+url_date_pairs = []
+
+if dates and len(dates) == len(urls):
+    # If we have dates for all URLs, create pairs for sorting
+    logger.info("Found lastmod dates in sitemap")
+    url_date_pairs = list(zip(urls, dates))
+    
+    # Sort by date if we're looking for latest post
+    if args.latest:
+        logger.info("Sorting URLs by date to find latest post")
+        url_date_pairs.sort(key=lambda x: x[1], reverse=True)
+        post_url = url_date_pairs[0][0]
+        post_date = url_date_pairs[0][1]
+        logger.info(f"Selected latest post: {post_url} (date: {post_date})")
+    else:
+        # Random selection
+        logger.info("Selecting random post from sitemap")
+        selected_pair = random.choice(url_date_pairs)
+        post_url = selected_pair[0]
+        post_date = selected_pair[1]
+        logger.info(f"Selected random post: {post_url} (date: {post_date})")
+else:
+    # Fallback to just URLs without dates
+    if not urls:
+        logger.error("No URLs found in sitemap")
+        raise RuntimeError("No URLs found in sitemap")
+    
+    if args.latest:
+        logger.warning("No lastmod dates found in sitemap, cannot determine latest post accurately")
+        logger.info("Using URL patterns to try to determine latest post")
+        
+        # Try to infer latest by URL pattern (many blogs have dates in URLs)
+        # This is a fallback approach that may not work for all sites
+        date_pattern = re.compile(r'/(20\d{2})/(\d{2})/(\d{2})/')
+        dated_urls = []
+        
+        for url in urls:
+            match = date_pattern.search(url)
+            if match:
+                year, month, day = match.groups()
+                date_str = f"{year}-{month}-{day}"
+                dated_urls.append((url, date_str))
+        
+        if dated_urls:
+            logger.info("Found dates in URL patterns")
+            dated_urls.sort(key=lambda x: x[1], reverse=True)
+            post_url = dated_urls[0][0]
+            logger.info(f"Selected latest post based on URL pattern: {post_url}")
+        else:
+            logger.warning("Could not determine dates from URLs, selecting first URL in sitemap")
+            post_url = urls[0]
+            logger.info(f"Selected first post in sitemap: {post_url}")
+    else:
+        # Random selection without dates
+        logger.info("Selecting random post from sitemap")
+        post_url = random.choice(urls)
+        logger.info(f"Selected random post: {post_url}")
 
 # — 2. fetch the post HTML and extract content —
 logger.info(f"Fetching post content from {post_url}")
