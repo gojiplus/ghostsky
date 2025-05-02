@@ -5,6 +5,8 @@ import re
 import requests
 import logging
 from atproto import Client
+from bs4 import BeautifulSoup
+import html
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +25,7 @@ SITEMAP    = os.getenv(
     "https://www.gojiberries.io/sitemap-posts.xml"
 )
 MAX_LEN = 300
+LABEL = "Read more →"
 
 if not (HANDLE and PASSWORD):
     raise RuntimeError("Missing BSKY_HANDLE / BSKY_PASSWORD env vars")
@@ -38,43 +41,84 @@ if not urls:
 post_url = random.choice(urls)
 logger.info(f"Selected post URL: {post_url}")
 
-# — 2. fetch the post HTML and extract <title> —
+# — 2. fetch the post HTML and extract content —
 logger.info(f"Fetching post content from {post_url}")
 try:
     response = requests.get(post_url)
     response.raise_for_status()
-    html = response.text
-    m = re.search(r"<title>([^<]+)</title>", html, re.IGNORECASE)
-    title = m.group(1).strip() if m else post_url
+    html_content = response.text
+    
+    # Parse HTML with BeautifulSoup
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Extract title
+    title_tag = soup.find('title')
+    title = title_tag.get_text().strip() if title_tag else ""
     logger.info(f"Extracted title: {title}")
+    
+    # Try to find the main content
+    # This is site-specific and may need adjustments
+    content = ""
+    
+    # Look for common content containers
+    content_selectors = [
+        'article', 
+        '.post-content', 
+        '.entry-content',
+        '.content',
+        'main',
+        '#content'
+    ]
+    
+    for selector in content_selectors:
+        content_element = soup.select_one(selector)
+        if content_element:
+            # Get only text content, removing HTML tags
+            content = content_element.get_text(separator=' ', strip=True)
+            if content:
+                logger.info(f"Found content using selector: {selector}")
+                break
+    
+    if not content and not title:
+        logger.warning("Could not extract content or title from HTML")
+        title = post_url
+    
 except Exception as e:
     logger.error(f"Error fetching post: {str(e)}")
     title = post_url
+    content = ""
     logger.info(f"Using URL as title: {title}")
 
 # — 3. build message and truncate if necessary —
-label = "Read more →"
-
-# Calculate available space for title
-# Account for the label text and two newline characters
-# Each newline counts as 1 character in the final count
+# Clean up content - remove extra whitespace
+if content:
+    content = re.sub(r'\s+', ' ', content).strip()
+    
+# Calculate available space for our message
 newlines_chars = 2  # Two newlines "\n\n" = 2 characters
-available_chars = MAX_LEN - len(label) - newlines_chars
+label_length = len(LABEL)
+available_chars = MAX_LEN - label_length - newlines_chars
 
 logger.info(f"Maximum message length: {MAX_LEN} characters")
-logger.info(f"Label length: {len(label)} characters")
-logger.info(f"Available space for title: {available_chars} characters")
-logger.info(f"Original title length: {len(title)} characters")
+logger.info(f"Label length: {label_length} characters")
+logger.info(f"Available space for content: {available_chars} characters")
 
-# Truncate title if necessary
-original_title = title
-if len(title) > available_chars:
+# Combine title and content if possible
+if title and content:
+    combined_text = f"{title} - {content}"
+else:
+    combined_text = title or content or post_url
+
+logger.info(f"Combined text length (before truncation): {len(combined_text)} characters")
+
+# Truncate if necessary
+if len(combined_text) > available_chars:
     # Leave space for the ellipsis (…) character
-    title = title[:available_chars - 1].rstrip() + "…"
-    logger.info(f"Title truncated from {len(original_title)} to {len(title)} characters")
+    combined_text = combined_text[:available_chars - 1].rstrip() + "…"
+    logger.info(f"Text truncated to {len(combined_text)} characters")
 
 # Create the full message
-message = f"{title}\n\n{label}"
+message = f"{combined_text}\n\n{LABEL}"
 
 # Verify message length
 actual_length = len(message)
@@ -89,9 +133,9 @@ logger.info(f"Message: {message}")
 # — 4. compute facet over the label text —
 # find the byte offsets of the label in the UTF-8 message
 logger.info("Computing facets for link embedding")
-char_start = message.find(label)
+char_start = message.find(LABEL)
 prefix_b = message[:char_start].encode("utf-8")
-label_b  = label.encode("utf-8")
+label_b  = LABEL.encode("utf-8")
 byte_start = len(prefix_b)
 byte_end   = byte_start + len(label_b)
 
