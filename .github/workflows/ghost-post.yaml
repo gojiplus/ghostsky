@@ -3,7 +3,7 @@ name: Post Ghost → Bsky
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 16 * * *"  # every day at 4 PM UTC
+    - cron: "0 12 * * *" # 5 AM PT
 
 jobs:
   post:
