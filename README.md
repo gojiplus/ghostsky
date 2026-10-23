@@ -1,65 +1,49 @@
-## &#x1F47B;&#x1F98B; Post Random Ghost Blog to Bluesky
+# Ghostsky
 
-Fetch a random post from your Ghost blog’s sitemap and publish it to your Bluesky feed on a schedule or on demand.
+Ghostsky shares articles from [Gojiberries](https://www.gojiberries.io/) on
+Bluesky. It posts an article title, a shortened excerpt, and a clickable link.
 
-## Features
+## Selection and schedule
 
-- Reads all post URLs from your Ghost sitemap (`sitemap-posts.xml`)
-- Picks one at random each run
-- Authenticates and posts via the Bluesky AT Protocol client
-- Fully configurable via Action inputs
+- Scheduled runs choose a random article from the Ghost post sitemap.
+- Manual runs can choose `latest`, which uses publication dates in the RSS feed.
+  Sitemap `lastmod` dates reflect later edits and are not publication dates.
+- Articles posted in the last 90 days are excluded. The workflow commits
+  successful posts to `data/post_history.json` and checks recent Bluesky posts
+  before choosing, so a retry after a failed history commit avoids a duplicate.
 
-## Usage
+The workflow runs at 9:17 a.m. Pacific time on Tuesday and Thursday, between
+Advertiser's Monday, Wednesday, and Friday repository posts. GitHub may delay
+scheduled runs.
 
-### 1. Add the Action to your repo
+## Setup and preview
 
-Create a folder `.github/actions/post-ghost` and put both:
-- [action.yaml](#action-metadata)  
-- `scripts/post_random_ghost.py` (from earlier)
+Set `BSKY_HANDLE` and `BSKY_PASSWORD` as repository Actions secrets. Use a
+Bluesky app password. The workflow uses the built-in `GITHUB_TOKEN` with
+`contents: write` only for its posting job, to save post history.
 
-### 2. Configure Secrets
+Use **Actions → Post Ghost Blog to Bluesky → Run workflow**. Manual runs default
+to a dry run, which fetches the article and prints its final post text without
+publishing. Choose `latest` to preview a recent article, or enter an
+`article_url` from the sitemap to preview and publish that exact article. Set
+`dry_run` to false for a live post.
 
-Go to **Settings → Secrets** and add:
-- `BSKY_HANDLE` – your Bluesky username
-- `BSKY_PASSWORD` – your Bluesky password
+To preview locally:
 
-### 3. Example workflow
-
-```yaml
-name: 🥝 Post Random Ghost Blog to Bluesky
-
-on:
-  schedule:
-    - cron: '0 16 * * *'     # every day at 16:00 UTC
-  workflow_dispatch:         # allow manual trigger
-
-jobs:
-  post:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Post random blog link
-        uses: ./.github/actions/post-ghost
-        with:
-          handle: ${{ secrets.BSKY_HANDLE }}
-          password: ${{ secrets.BSKY_PASSWORD }}
-          sitemap-url: https://www.gojiberries.io/sitemap-posts.xml
+```sh
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python scripts/post_random_ghost.py --dry-run --handle YOUR_HANDLE
 ```
 
-### Inputs
+No Bluesky password is needed for a dry run.
 
-| Name        | Description                                     | Required | Default                                 |
-|-------------|-------------------------------------------------|:--------:|:----------------------------------------|
-| `handle`      | Your Bluesky handle (username)                  | ✅       |                                          |
-| `password`    | Your Bluesky password                           | ✅       |                                          |
-| `sitemap-url` | Full URL to your Ghost blog’s `sitemap-posts.xml` | ✅       | `https://yourblog.com/sitemap-posts.xml` |
+## Development checks
 
-
-
-### How it works
-
-1. Fetch the sitemap (XML) and extract all <loc> URLs
-2. Choose one at random
-3. Login to Bluesky via atproto-client
-4. Post a status like
+```sh
+black --check scripts tests
+isort --check-only scripts tests
+flake8 scripts tests
+python -m pytest -q
+actionlint .github/workflows/ghost-post.yaml
+```

@@ -1,38 +1,79 @@
-name: Post Ghost → Bsky
+name: Post Ghost Blog to Bluesky
+
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
+      dry_run:
+        description: Preview without publishing
+        type: boolean
+        default: true
       post_type:
-        description: 'Type of post to publish'
-        required: true
-        default: 'random'
+        description: Article selection
         type: choice
-        options:
-          - random
-          - latest
+        options: [random, latest]
+        default: random
+      article_url:
+        description: Optional Ghost article URL
+        type: string
   schedule:
-    - cron: "0 12 * * *" # 5 AM PT
+    - cron: "17 9 * * 2,4"
+      timezone: America/Los_Angeles
+
+concurrency:
+  group: ghostsky-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  post:
+  test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: '3.11'
-      - name: Install deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Post Ghost blog to Bluesky
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt black isort flake8 pytest
+      - run: black --check scripts tests
+      - run: isort --check-only scripts tests
+      - run: flake8 scripts tests
+      - run: python -m pytest -q
+
+  post:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Select and post article
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_PASSWORD: ${{ secrets.BSKY_PASSWORD }}
-          SITEMAP_URL: https://www.gojiberries.io/sitemap-posts.xml
+          DRY_RUN: ${{ inputs.dry_run }}
+          POST_TYPE: ${{ inputs.post_type || 'random' }}
+          ARTICLE_URL: ${{ inputs.article_url }}
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.post_type }}" == "latest" ]]; then
-            python scripts/post_random_ghost.py --latest
-          else
-            python scripts/post_random_ghost.py
+          args=(--post-type "$POST_TYPE")
+          if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          if [[ -n "$ARTICLE_URL" ]]; then args+=(--url "$ARTICLE_URL"); fi
+          python scripts/post_random_ghost.py "${args[@]}"
+      - name: Save post history
+        run: |
+          if [[ -n "$(git status --short -- data/post_history.json)" ]]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add data/post_history.json
+            git commit -m 'Record Ghost blog post'
+            git push
           fi

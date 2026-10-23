@@ -1,249 +1,227 @@
 #!/usr/bin/env python3
+"""Post a Ghost article from Gojiberries to Bluesky."""
+
+import argparse
+import json
 import os
 import random
 import re
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import urlsplit
+from xml.etree import ElementTree
+
 import requests
-import logging
-import argparse
-from atproto import Client
 from bs4 import BeautifulSoup
-from datetime import datetime
-import sys
 
-# Configure argument parser
-parser = argparse.ArgumentParser(description='Post blog content to Bluesky')
-parser.add_argument('--latest', action='store_true', help='Post the latest article instead of a random one')
-args = parser.parse_args()
+SITEMAP_URL = "https://www.gojiberries.io/sitemap-posts.xml"
+RSS_URL = "https://www.gojiberries.io/rss/"
+BLUESKY_API = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed"
+HISTORY_PATH = Path(__file__).resolve().parents[1] / "data" / "post_history.json"
+COOLDOWN_DAYS = 90
+MAX_POST_LENGTH = 300
+BLOG_URL = re.compile(r"https://(?:www\.)?gojiberries\.io/[^\s]+", re.I)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger("bluesky_autopost")
 
-# — configuration —
-SPROUT_URL = "https://bsky.social"
-HANDLE     = os.getenv("BSKY_HANDLE")
-PASSWORD   = os.getenv("BSKY_PASSWORD")
-SITEMAP    = os.getenv(
-    "SITEMAP_URL",
-    "https://www.gojiberries.io/sitemap-posts.xml"
-)
-MAX_LEN = 300
-LABEL = "Read more →"
-
-if not (HANDLE and PASSWORD):
-    raise RuntimeError("Missing BSKY_HANDLE / BSKY_PASSWORD env vars")
-
-# — 1. fetch sitemap and pick a post —
-logger.info(f"Fetching sitemap from {SITEMAP}")
-resp = requests.get(SITEMAP)
-resp.raise_for_status()
-urls = re.findall(r"<loc>(https?://.*?)</loc>", resp.text)
-
-# Look for lastmod tags if present
-dates = re.findall(r"<lastmod>(.*?)</lastmod>", resp.text)
-url_date_pairs = []
-
-if dates and len(dates) == len(urls):
-    # If we have dates for all URLs, create pairs for sorting
-    logger.info("Found lastmod dates in sitemap")
-    url_date_pairs = list(zip(urls, dates))
-    
-    # Sort by date if we're looking for latest post
-    if args.latest:
-        logger.info("Sorting URLs by date to find latest post")
-        url_date_pairs.sort(key=lambda x: x[1], reverse=True)
-        post_url = url_date_pairs[0][0]
-        post_date = url_date_pairs[0][1]
-        logger.info(f"Selected latest post: {post_url} (date: {post_date})")
-    else:
-        # Random selection
-        logger.info("Selecting random post from sitemap")
-        selected_pair = random.choice(url_date_pairs)
-        post_url = selected_pair[0]
-        post_date = selected_pair[1]
-        logger.info(f"Selected random post: {post_url} (date: {post_date})")
-else:
-    # Fallback to just URLs without dates
-    if not urls:
-        logger.error("No URLs found in sitemap")
-        raise RuntimeError("No URLs found in sitemap")
-    
-    if args.latest:
-        logger.warning("No lastmod dates found in sitemap, cannot determine latest post accurately")
-        logger.info("Using URL patterns to try to determine latest post")
-        
-        # Try to infer latest by URL pattern (many blogs have dates in URLs)
-        # This is a fallback approach that may not work for all sites
-        date_pattern = re.compile(r'/(20\d{2})/(\d{2})/(\d{2})/')
-        dated_urls = []
-        
-        for url in urls:
-            match = date_pattern.search(url)
-            if match:
-                year, month, day = match.groups()
-                date_str = f"{year}-{month}-{day}"
-                dated_urls.append((url, date_str))
-        
-        if dated_urls:
-            logger.info("Found dates in URL patterns")
-            dated_urls.sort(key=lambda x: x[1], reverse=True)
-            post_url = dated_urls[0][0]
-            logger.info(f"Selected latest post based on URL pattern: {post_url}")
-        else:
-            logger.warning("Could not determine dates from URLs, selecting first URL in sitemap")
-            post_url = urls[0]
-            logger.info(f"Selected first post in sitemap: {post_url}")
-    else:
-        # Random selection without dates
-        logger.info("Selecting random post from sitemap")
-        post_url = random.choice(urls)
-        logger.info(f"Selected random post: {post_url}")
-
-# — 2. fetch the post HTML and extract content —
-logger.info(f"Fetching post content from {post_url}")
-try:
-    response = requests.get(post_url)
+def get_xml(session, url):
+    response = session.get(url, timeout=20)
     response.raise_for_status()
-    html_content = response.text
-    
-    # Parse HTML with BeautifulSoup
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    # Extract title
-    title_tag = soup.find('title')
-    title = title_tag.get_text().strip() if title_tag else ""
-    logger.info(f"Extracted title: {title}")
-    
-    # Try to find the main content
-    # This is site-specific and may need adjustments
-    content = ""
-    
-    # Look for common content containers
-    content_selectors = [
-        'article', 
-        '.post-content', 
-        '.entry-content',
-        '.content',
-        'main',
-        '#content'
-    ]
-    
-    for selector in content_selectors:
-        content_element = soup.select_one(selector)
-        if content_element:
-            # Get only text content, removing HTML tags
-            content = content_element.get_text(separator=' ', strip=True)
-            if content:
-                logger.info(f"Found content using selector: {selector}")
-                break
-    
-    if not content and not title:
-        logger.warning("Could not extract content or title from HTML")
-        title = post_url
-    
-except Exception as e:
-    logger.error(f"Error fetching post: {str(e)}")
-    title = post_url
-    content = ""
-    logger.info(f"Using URL as title: {title}")
+    return ElementTree.fromstring(response.content)
 
-# — 3. build message and truncate if necessary —
-# Clean up content - remove extra whitespace
-if content:
-    content = re.sub(r'\s+', ' ', content).strip()
-    
-# Calculate available space for our message
-newlines_chars = 2  # Two newlines "\n\n" = 2 characters
-label_length = len(LABEL)
-available_chars = MAX_LEN - label_length - newlines_chars
 
-logger.info(f"Maximum message length: {MAX_LEN} characters")
-logger.info(f"Label length: {label_length} characters")
-logger.info(f"Available space for content: {available_chars} characters")
+def canonical_url(url):
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname not in {
+        "gojiberries.io",
+        "www.gojiberries.io",
+    }:
+        raise ValueError(f"Unexpected blog URL: {url}")
+    return f"https://www.gojiberries.io{parsed.path.rstrip('/')}/"
 
-# FIXED: Check if title appears at the start of content to avoid duplication
-title_at_start = False
-if title and content and len(title) < len(content):
-    # Remove any HTML entities or special characters before comparison
-    clean_title = re.sub(r'&[a-zA-Z]+;', ' ', title).strip()
-    clean_content = re.sub(r'&[a-zA-Z]+;', ' ', content[:len(title)+20]).strip()
-    
-    # Check if content starts with title (allowing for minor differences)
-    if clean_content.startswith(clean_title) or content.startswith(title):
-        title_at_start = True
-        logger.info("Title appears at the start of content - avoiding duplication")
 
-# Create the message based on what content we have
-if title_at_start:
-    # If title is already at the start of content, just use content
-    combined_text = content
-elif title and content:
-    # If we have both title and content, combine them
-    combined_text = f"{title} - {content}"
-else:
-    # Use whatever we have
-    combined_text = title or content or post_url
+def fetch_sitemap_urls(session):
+    root = get_xml(session, SITEMAP_URL)
+    urls = []
+    for item in root.findall("{*}url"):
+        loc = item.findtext("{*}loc")
+        if loc:
+            urls.append(canonical_url(loc))
+    if not urls:
+        raise RuntimeError("No posts found in the Ghost sitemap")
+    return list(dict.fromkeys(urls))
 
-logger.info(f"Combined text length (before truncation): {len(combined_text)} characters")
 
-# Truncate if necessary
-if len(combined_text) > available_chars:
-    # Leave space for the ellipsis (…) character
-    combined_text = combined_text[:available_chars - 1].rstrip() + "…"
-    logger.info(f"Text truncated to {len(combined_text)} characters")
+def fetch_latest_urls(session):
+    root = get_xml(session, RSS_URL)
+    posts = []
+    for item in root.findall("./channel/item"):
+        url = item.findtext("link")
+        published = item.findtext("pubDate")
+        if url and published:
+            posts.append((parsedate_to_datetime(published), canonical_url(url)))
+    if not posts:
+        raise RuntimeError("No published posts found in the Ghost RSS feed")
+    return [url for _, url in sorted(posts, reverse=True)]
 
-# Create the full message
-message = f"{combined_text}\n\n{LABEL}"
 
-# Verify message length
-actual_length = len(message)
-logger.info(f"Final message length: {actual_length}/{MAX_LEN} characters")
+def load_history(path=HISTORY_PATH):
+    if not path.exists():
+        return []
+    history = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(history, list):
+        raise ValueError("Post history must be a JSON list")
+    return history
 
-if actual_length > MAX_LEN:
-    logger.error(f"Message exceeded maximum length: {actual_length} > {MAX_LEN}")
-    raise RuntimeError(f"Message exceeded maximum length: {actual_length} > {MAX_LEN}")
 
-logger.info(f"Message: {message}")
-
-# — 4. compute facet over the label text —
-# find the byte offsets of the label in the UTF-8 message
-logger.info("Computing facets for link embedding")
-char_start = message.find(LABEL)
-prefix_b = message[:char_start].encode("utf-8")
-label_b  = LABEL.encode("utf-8")
-byte_start = len(prefix_b)
-byte_end   = byte_start + len(label_b)
-
-logger.info(f"Character start: {char_start}")
-logger.info(f"Byte start: {byte_start}, Byte end: {byte_end}")
-
-facets = [
-    {
-        "index": {"byteStart": byte_start, "byteEnd": byte_end},
-        "features": [
-            {"$type": "app.bsky.richtext.facet#link", "uri": post_url}
-        ]
+def recent_history_urls(history, now):
+    cutoff = now - timedelta(days=COOLDOWN_DAYS)
+    return {
+        canonical_url(entry["url"])
+        for entry in history
+        if datetime.fromisoformat(entry["posted_at"]) >= cutoff
     }
-]
-logger.info(f"Facets created: {facets}")
 
-# — 5. login and post —
-logger.info(f"Logging in to Bluesky as {HANDLE}")
-try:
-    client = Client(SPROUT_URL)
-    client.login(HANDLE, PASSWORD)
-    
-    logger.info("Sending post to Bluesky")
-    res = client.send_post(message, facets=facets)
-    
-    logger.info(f"Successfully posted to Bluesky: {res.uri}")
-    print("Posted to Bluesky:", res.uri)
-except Exception as e:
-    logger.error(f"Error posting to Bluesky: {str(e)}")
-    raise
 
-logger.info("Script completed successfully")
+def recent_feed_urls(session, handle, now):
+    cutoff = now - timedelta(days=COOLDOWN_DAYS)
+    urls = set()
+    cursor = None
+    while True:
+        params = {"actor": handle, "limit": 100, "filter": "posts_no_replies"}
+        if cursor:
+            params["cursor"] = cursor
+        response = session.get(BLUESKY_API, params=params, timeout=20)
+        response.raise_for_status()
+        page = response.json()
+        oldest = now
+        for item in page.get("feed", []):
+            if "reason" in item:
+                continue
+            post = item["post"]
+            if post["author"]["handle"].lower() != handle.lower():
+                continue
+            record = post["record"]
+            created = datetime.fromisoformat(record["createdAt"].replace("Z", "+00:00"))
+            oldest = min(oldest, created)
+            if created < cutoff:
+                continue
+            for match in BLOG_URL.finditer(record.get("text", "")):
+                urls.add(canonical_url(match.group().rstrip(".,!?:;)")))
+        cursor = page.get("cursor")
+        if not cursor or not page.get("feed") or oldest < cutoff:
+            return urls
+
+
+def choose_url(urls, excluded, post_type, rng):
+    available = [url for url in urls if url not in excluded]
+    if not available:
+        return None
+    return available[0] if post_type == "latest" else rng.choice(available)
+
+
+def fetch_post_metadata(session, url):
+    response = session.get(url, timeout=20)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    title_tag = soup.find("meta", property="og:title")
+    description_tag = soup.find("meta", property="og:description")
+    title = title_tag.get("content", "") if title_tag else ""
+    description = description_tag.get("content", "") if description_tag else ""
+    if not title and soup.title:
+        title = soup.title.get_text(" ", strip=True)
+    if not description:
+        paragraph = soup.select_one("article p")
+        description = paragraph.get_text(" ", strip=True) if paragraph else ""
+    return title.strip() or url, description.strip()
+
+
+def format_post(title, description, url):
+    base = title.strip()
+    suffix = f"\n\n{url}"
+    available = MAX_POST_LENGTH - len(base) - len(suffix) - 2
+    if available < 0:
+        raise ValueError("Article title and URL exceed the post limit")
+    summary = " ".join(description.split())
+    summary = re.sub(r"\\([\\$*_`])", r"\1", summary)
+    if len(summary) > available:
+        head = summary[:available]
+        sentence_ends = [
+            match.end()
+            for match in re.finditer(r"[.!?](?=\s|$)", head)
+            if match.end() >= min(60, available // 2)
+        ]
+        if sentence_ends:
+            summary = head[: sentence_ends[-1]]
+        else:
+            summary = summary[: available - 1].rsplit(" ", 1)[0].rstrip() + "…"
+    text = f"{base}\n\n{summary}{suffix}" if summary else f"{base}{suffix}"
+    start = len(text[: text.index(url)].encode("utf-8"))
+    end = start + len(url.encode("utf-8"))
+    facets = [
+        {
+            "index": {"byteStart": start, "byteEnd": end},
+            "features": [{"$type": "app.bsky.richtext.facet#link", "uri": url}],
+        }
+    ]
+    return text, facets
+
+
+def record_post(history, url, uri, now, path=HISTORY_PATH):
+    history.append({"url": url, "posted_at": now.isoformat(), "post_uri": uri})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--post-type", choices=("random", "latest"), default="random")
+    parser.add_argument("--url", help="Choose one article from the Ghost sitemap")
+    parser.add_argument("--handle", default=os.getenv("BSKY_HANDLE"))
+    args = parser.parse_args()
+    if not args.handle:
+        parser.error("BSKY_HANDLE or --handle is required")
+
+    now = datetime.now(timezone.utc)
+    session = requests.Session()
+    if args.url:
+        url = canonical_url(args.url)
+        if url not in fetch_sitemap_urls(session):
+            parser.error("--url must be an article in the Ghost sitemap")
+        urls = [url]
+    else:
+        urls = (
+            fetch_latest_urls(session)
+            if args.post_type == "latest"
+            else fetch_sitemap_urls(session)
+        )
+    history = load_history()
+    excluded = recent_history_urls(history, now) | recent_feed_urls(
+        session, args.handle, now
+    )
+    url = choose_url(urls, excluded, args.post_type, random)
+    if url is None:
+        print("No article is available outside the 90-day cooldown")
+        return
+    title, description = fetch_post_metadata(session, url)
+    text, facets = format_post(title, description, url)
+    print(f"Selected {url} ({args.post_type})")
+    print(text)
+    if args.dry_run:
+        return
+
+    password = os.getenv("BSKY_PASSWORD")
+    if not password:
+        parser.error("BSKY_PASSWORD is required to publish")
+    from atproto import Client
+
+    client = Client()
+    client.login(args.handle, password)
+    result = client.send_post(text, facets=facets)
+    record_post(history, url, result.uri, now)
+    print(f"Published {result.uri}")
+
+
+if __name__ == "__main__":
+    main()
